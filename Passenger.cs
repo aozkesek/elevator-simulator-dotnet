@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Threading;
 
 namespace ElevatorSimulator
 {
@@ -9,15 +10,26 @@ namespace ElevatorSimulator
 
                 public int Floor { get; private set; }
                 public int DestFloor { get; private set; }
+                private Object lockobject = new Object();
+                private int elevatorid;
+                public int ElevatorId { 
+                        get { return this.elevatorid; } 
+                        set { 
+                                Monitor.Enter(this.lockobject);
+                                if (this.elevatorid == -1) 
+                                        this.elevatorid = value; 
+                                Monitor.Exit(this.lockobject);
+                                } 
+                        }
                 
-                public Passenger(Elevator elevator)
+                public Passenger()
                 {
-                        Floor = random.Next(elevator.Floor);
-                        DestFloor = random.Next(elevator.Floor);
+                        elevatorid = -1;
+                        Floor = random.Next(Elevator.Floor);
+                        DestFloor = random.Next(Elevator.Floor);
                         while (Floor == DestFloor)
-                                DestFloor = random.Next(elevator.Floor);
+                                DestFloor = random.Next(Elevator.Floor);
 
-                        elevator.QueuePassenger(this);
                 }
 
                 public Direction Direction {

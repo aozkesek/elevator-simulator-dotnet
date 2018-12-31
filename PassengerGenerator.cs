@@ -5,29 +5,31 @@ namespace ElevatorSimulator
 {
         class PassengerGenerator
         {
-                private Elevator elevator;
                 private int Interval;
+                private WaitingPassengerQueue waitingPassengers;
                 
-                public PassengerGenerator(Elevator elevator, int interval)
+                public PassengerGenerator(int interval, 
+                        WaitingPassengerQueue waitingPassengers)
                 {
-                        this.elevator = elevator;
                         this.Interval = interval * 1000;
+                        this.waitingPassengers = waitingPassengers;
                 }
 
                 public void Run() {
                         Random random = new Random();
 
-                        while (!elevator.IsShuttingDown) {
+                        while (!Elevator.IsShuttingDown) {
                                 Thread.Sleep(random.Next(Interval));
-                                new Passenger(elevator);
+                                waitingPassengers.Add(new Passenger());
                         }
                 }
 
-                public static Thread GetNewThread(
-                        Elevator elevator, int interval) {
+                public static Thread GetNewThread(int interval,
+                        WaitingPassengerQueue waitingPassengers) {
 
                         return new Thread(new ThreadStart(
-                                new PassengerGenerator(elevator, interval).Run));
+                                new PassengerGenerator(interval, waitingPassengers)
+                                        .Run));
                 }
         }
 }

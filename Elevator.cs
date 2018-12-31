@@ -11,47 +11,41 @@ namespace ElevatorSimulator
         class Elevator
         {
 
-                public int Floor { get; }
+                public static int Floor { get; set; }
                 public int Capasity { get; }
                 public int Speed { get; }
                 public int CurrentFloor { get; private set; }
                 public Direction State { get; private set; }
-                public bool IsShuttingDown { get; set; }
+                public static bool IsShuttingDown { get; set; }
+                public int ElevatorId { get; private set; }
                 
-                private ConcurrentDictionary<int, Passenger> waitingPassengers;
+                private WaitingPassengerQueue waitingPassengers;
                 private ConcurrentDictionary<int, Passenger> passengers;
                 
-                public Elevator(int floor, int capasity, int speed) {
-                        this.Floor = floor;
+                public Elevator(WaitingPassengerQueue waitingPassengers, 
+                        int capasity, int speed) {
+                        
+                        this.waitingPassengers = waitingPassengers;
                         this.Capasity = capasity;
                         this.Speed = speed;
-
+                        
                         CurrentFloor = 0;
                         State = Direction.IDLE;
-                        IsShuttingDown = false;
-
-                        waitingPassengers = new ConcurrentDictionary<int, Passenger>();
+                        
                         passengers = new ConcurrentDictionary<int, Passenger>();
 
                 }
 
-                public void QueuePassenger(Passenger passenger) {
-                        Console.WriteLine(passenger + " is queued.");
-                        waitingPassengers.TryAdd(passenger.GetHashCode(), passenger);
+                public bool IsAvailableRoom {
+                        get { return passengers.Count < Capasity; }
                 }
 
+                public bool AddPassenger(Passenger passenger) {
+                        return passengers
+                                .TryAdd(passenger.GetHashCode(), passenger);
+                }
                 private void PickupPassengerAtCurrentFor(Direction destDirection) {
-                        waitingPassengers.AsParallel()
-                                .Where((p) => p.Value.Floor == CurrentFloor && p.Value.Direction == destDirection )
-                                .ForAll((p) => {
-                                        if (passengers.Count < Capasity) {
-                                                Passenger pv = p.Value;
-                                                Console.WriteLine(">>> " + pv + " is getting in.");
-                                                passengers.TryAdd(p.Key, p.Value);
-                                                waitingPassengers.TryRemove(p.Key, out pv);    
-                                        }
-                                        
-                                });
+                        waitingPassengers.Pickup(this, destDirection);
                 }
 
                 private void DropPassengerAtCurrent()
@@ -60,7 +54,9 @@ namespace ElevatorSimulator
                                 .Where((p) => p.Value.DestFloor == CurrentFloor)
                                 .ForAll((p) => {
                                         Passenger pv = p.Value;
-                                        Console.WriteLine("<<< " + pv + " is getting out.");
+                                        Console.WriteLine("<<< " + pv 
+                                                + " is getting out from " 
+                                                + ElevatorId);
                                         passengers.TryRemove(p.Key, out pv);
                                 });
                 }
@@ -108,14 +104,9 @@ namespace ElevatorSimulator
                         }
                 }
 
-                private bool IsWaitingFor(Passenger passenger, Direction destDirection) {
-                        return passenger.Floor < CurrentFloor && destDirection == Direction.DOWN ||
-                                passenger.Floor > CurrentFloor && destDirection == Direction.UP;
-                }
                 private bool IsSomeoneExistFor(Direction destDirection) {
-                        return waitingPassengers.AsParallel()
-                                        .Where(p => IsWaitingFor(p.Value, destDirection))
-                                        .Count() > 0
+                        return waitingPassengers
+                                .IsPassengerWaitingFor(destDirection, CurrentFloor)
                                 || !passengers.IsEmpty;
                 }
 
@@ -144,7 +135,8 @@ namespace ElevatorSimulator
 
                 public void Report() {
                         Console.WriteLine(
-                                "Elevator is going " + State +
+                                this +
+                                " is going " + State +
                                 " currently at " + CurrentFloor +
                                 ", total " + waitingPassengers.Count + " person are waiting" +
                                 ", total " + passengers.Count + " person are giving service"
@@ -163,6 +155,8 @@ namespace ElevatorSimulator
                                         destDirection = Direction.UP;
 
                                 State = destDirection;
+
+                                waitingPassengers.Get(this);
                                 
                                 Report();
 
@@ -182,6 +176,7 @@ namespace ElevatorSimulator
                 }
 
                 public void Run() {
+                        ElevatorId = Thread.CurrentThread.ManagedThreadId;
 
                         while (!IsShuttingDown) {
                                 Thread.Yield();
@@ -189,18 +184,24 @@ namespace ElevatorSimulator
                                 if (waitingPassengers.IsEmpty)
                                         continue;
 
-                                Passenger passenger = waitingPassengers.First().Value;
+                                Passenger passenger = waitingPassengers.GetFirst(this);
+                        
+                                if (passenger == null || passenger.ElevatorId != ElevatorId)
+                                        continue;
+
                                 Direction initialDirection = GetDirectionFor(passenger);
                                 Direction destDirection = initialDirection;
 
                                 if (destDirection == Direction.IDLE)
                                         destDirection = passenger.Direction;
 
-                                Report();
-
                                 DoService(destDirection);
 
                         }
+                }
+
+                public override String ToString() {
+                        return "Elevator-" + ElevatorId;
                 }
 
                 public Thread GetNewThread() 
