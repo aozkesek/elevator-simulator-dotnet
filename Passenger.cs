@@ -1,50 +1,32 @@
 ﻿using System;
-using System.Threading;
 
 namespace ElevatorSimulator
 {
-        class Passenger
-        {
+class Passenger
+{
+    public int Floor { get; private set; }
+    public int DestFloor { get; private set; }
+    
+    public Passenger()
+    {
+        Floor = RandomGenerator.Next(Elevator.Floor);
+        DestFloor = RandomGenerator.Next(Elevator.Floor);
+        while (Floor == DestFloor)
+            DestFloor = RandomGenerator.Next(Elevator.Floor);
 
-                private static Random random = new Random();
+    }
 
-                public int Floor { get; private set; }
-                public int DestFloor { get; private set; }
-                private Object lockobject = new Object();
-                private int elevatorid;
-                public int ElevatorId { 
-                        get { return this.elevatorid; } 
-                        set { 
-                                Monitor.Enter(this.lockobject);
-                                if (this.elevatorid == -1) 
-                                        this.elevatorid = value; 
-                                Monitor.Exit(this.lockobject);
-                                } 
-                        }
-                
-                public Passenger()
-                {
-                        elevatorid = -1;
-                        Floor = random.Next(Elevator.Floor);
-                        DestFloor = random.Next(Elevator.Floor);
-                        while (Floor == DestFloor)
-                                DestFloor = random.Next(Elevator.Floor);
-
-                }
-
-                public Direction Direction {
-                        get {
-                                if (Floor > DestFloor)
-                                        return Direction.DOWN;
-                                else if (Floor < DestFloor)
-                                        return Direction.UP;
-                                
-                                return Direction.IDLE;
-                        }
-                }
-
-                public override String ToString() {
-                        return "<Passenger: at " + Floor + " to " + DestFloor + ">"; 
-                }
+    public Direction Direction {
+        get {
+            if (Floor > DestFloor)
+                return Direction.DOWN;
+            return Direction.UP;
         }
+    }
+
+    public override String ToString() {
+        return string.Format("[ P{0,-9}:{1}>{2}|{3} ]", GetHashCode(), 
+            Floor, DestFloor, Direction); 
+    }
+}
 }
