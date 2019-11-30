@@ -25,16 +25,16 @@ class Elevator
     }
 
     public Direction State { get; private set; }
-    private BlockingCollection<Passenger> waitingQueue;
-    private BlockingCollection<Passenger> serviceQueue;
+    private ConcurrentDictionary<int, Passenger> waitingQueue;
+    private ConcurrentDictionary<int, Passenger> serviceQueue;
 
     public Elevator(int Capacity, int Speed) {
 
         this.Capacity = Capacity;
         this.Speed = Speed;
 
-        waitingQueue = new BlockingCollection<Passenger>();
-        serviceQueue = new BlockingCollection<Passenger>();
+        waitingQueue = new ConcurrentDictionary<int, Passenger>();
+        serviceQueue = new ConcurrentDictionary<int, Passenger>();
         
         CurrentFloor = 0;
         State = Direction.IDLE;
@@ -48,24 +48,30 @@ class Elevator
     public bool WaitFor(Passenger passenger) {
         if (Count == Capacity)
             return false;
-        waitingQueue.Add(passenger);
-        return true;
+        return waitingQueue.TryAdd(passenger.GetHashCode(), passenger);            
     }
 
     private void GetOff() {
         serviceQueue
-            .TakeWhile(p => p.DestFloor == CurrentFloor)
+            .Where(p => p.Value.DestFloor == CurrentFloor)
             .AsParallel()
-            .ForAll(p => Console.WriteLine("<" + p + " has got off " + this));
+            .ForAll(p => {
+                Passenger pr = p.Value;
+                if (serviceQueue.TryRemove(pr.GetHashCode(), out pr))
+                    Console.WriteLine("<" + pr + " has got off " + this);
+            });
     }
 
     private void GetOn() {
         waitingQueue
-            .TakeWhile((p, i) => p.Floor == CurrentFloor && p.Direction == State)
+            .Where(p => p.Value.Floor == CurrentFloor && p.Value.Direction == State)
             .AsParallel()
             .ForAll(p => {
-                serviceQueue.Add(p);
-                Console.WriteLine(">" + p + " has got in " + this);
+                Passenger pr = p.Value;
+                if (waitingQueue.TryRemove(pr.GetHashCode(), out pr)) {
+                    if (serviceQueue.TryAdd(pr.GetHashCode(), pr))
+                        Console.WriteLine(">" + pr + " has got in " + this);
+                }
             });
     }
 
@@ -76,15 +82,15 @@ class Elevator
     private bool IsInService { get { return serviceQueue.Count > 0; } }
 
     private bool IsInServiceFor(Direction direction) {
-        return serviceQueue.Count(p => p.Direction == direction) > 0;
+        return serviceQueue.Count(p => p.Value.Direction == direction) > 0;
     }
 
     private bool IsWaiting { get { return waitingQueue.Count > 0; } }
 
     private bool IsWaitingFor(Direction direction) {
         return waitingQueue.Count(p => {
-            return (direction == Direction.UP && p.Floor > CurrentFloor) 
-                || (direction == Direction.DOWN && p.Floor < CurrentFloor);
+            return (direction == Direction.UP && p.Value.Floor > CurrentFloor) 
+                || (direction == Direction.DOWN && p.Value.Floor < CurrentFloor);
         }) > 0;
     }
 
@@ -156,8 +162,10 @@ class Elevator
         if (!IsWaiting)
             return null;
 
-        int min = waitingQueue.Min(p => Math.Abs(CurrentFloor - p.Floor));
-        return waitingQueue.First(p => Math.Abs(CurrentFloor - p.Floor) == min);
+        int min = waitingQueue.Min(p => Math.Abs(CurrentFloor - p.Value.Floor));
+        KeyValuePair<int, Passenger> first = waitingQueue
+            .First(p => Math.Abs(CurrentFloor - p.Value.Floor) == min);
+        return first.Value;
     }
 
     public void Run() {
@@ -180,7 +188,7 @@ class Elevator
     }
 
     public override String ToString() {
-        return string.Format("[ E{0,-9}: {1}|{2}|{3}/{4} ]", GetHashCode(), 
+        return string.Format("[ E{0,-9}:{1}|{2}|{3}/{4} ]", GetHashCode(), 
             CurrentFloor, State, serviceQueue.Count, waitingQueue.Count);
     }
 
