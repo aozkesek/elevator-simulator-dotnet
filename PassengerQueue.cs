@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Linq;
 using System;
 
@@ -7,7 +8,7 @@ namespace ElevatorSimulator {
 sealed class PassengerQueue {
     private static ConcurrentDictionary<Direction, ConcurrentBag<Passenger>> passengers
         = new ConcurrentDictionary<Direction, ConcurrentBag<Passenger>>(); 
-    private static ConcurrentBag<Elevator> elevators = new ConcurrentBag<Elevator>();
+    private static BlockingCollection<Elevator> elevators = new BlockingCollection<Elevator>();
     
     private PassengerQueue() {
     }
@@ -28,7 +29,7 @@ sealed class PassengerQueue {
     }
 
     public static void RemoveElevator(Elevator elevator) {
-        elevators.TryTake(out elevator);
+        elevators.TakeWhile(e => e.Equals(elevator));
         Console.WriteLine("-" + elevator + " is OUT OFF Service.");
     }
 
@@ -36,38 +37,6 @@ sealed class PassengerQueue {
         if (bag == null || bag.IsEmpty)
             return Int16.MaxValue;
         return bag.Min(p => Math.Abs(p.Floor - floor));
-    }
-
-    public static Passenger First(Elevator e) {
-        lock(passengers) {
-            int minDist = 0;
-            Passenger passenger = null;
-            if (e.State == Direction.IDLE) {
-                minDist = passengers.Min(kv => Min(kv.Value, e.CurrentFloor));
-                if (minDist == Int16.MaxValue)
-                    return null;
-                passenger = passengers
-                    .First(kv => Min(kv.Value, e.CurrentFloor) == minDist)
-                    .Value.First(p => Math.Abs(p.Floor-e.CurrentFloor) == minDist);
-            } else { 
-                minDist = passengers.Single(kv => kv.Key.Equals(e.State))
-                    .Value.Min(p => Math.Abs(p.Floor - e.CurrentFloor));
-                passenger = passengers.Single(kv => kv.Key.Equals(e.State))
-                    .Value.First(p => Math.Abs(p.Floor-e.CurrentFloor) == minDist);
-            }
-            if (null == passenger)
-                return null;
-            Console.WriteLine("*" + passenger + " will get in " + e);
-            if (passengers.Single(kv => kv.Key.Equals(passenger.Direction))
-                .Value.TryTake(out passenger)) {
-                    if (e.GetOn(passenger))
-                        return passenger;
-                    // NO-ROOM, ok, get back in the queue
-                    GetOn(passenger);
-                    return null;
-                }
-            return null;
-        }
     }
 
     private static bool IsUp(Elevator e, Passenger p) {
@@ -91,10 +60,45 @@ sealed class PassengerQueue {
             Console.WriteLine("Elevators are OUT OFF Service!");
             return;
         }
+        Elevator elevator = Nearest(passenger);
+        if (null != elevator) {
+            if (elevator.WaitFor(passenger)) {
+                Console.WriteLine("+" + passenger + " will get in " + elevator);
+                return;
+            }
+        }
         passengers
             .GetOrAdd(passenger.Direction, b => new ConcurrentBag<Passenger>())
             .Add(passenger);
+
         Console.WriteLine("+" + passenger + " is waiting for service...");
+
+    }
+
+    private static Elevator Nearest(Passenger p) {
+        IEnumerable<Elevator> availables = elevators.Where(e => e.IsRoomAvailable);
+        if (null == availables || availables.Count() == 0)
+            return null;
+
+        // it must be at least 2 floor difference between elevator and passenger
+        IEnumerable<Elevator> nearest = availables.Where(e => {
+            if (e.State == p.Direction) {
+                if (e.State == Direction.UP && e.CurrentFloor > p.Floor + 1)
+                    return false;
+                if (e.State == Direction.DOWN && e.CurrentFloor < p.Floor - 1)
+                    return false;
+                return true;
+            } else if (e.State == Direction.IDLE)
+                return true;
+            
+            return false;
+        });
+
+        if (null == nearest || nearest.Count() == 0)
+            return null;
+
+        int min = nearest.Min(e => Math.Abs(e.CurrentFloor - p.Floor));
+        return nearest.First(e => Math.Abs(e.CurrentFloor - p.Floor) == min);
     }
 
 }

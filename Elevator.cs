@@ -1,190 +1,192 @@
 ﻿using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Threading;
 using System.Linq;
 using System;
 
 namespace ElevatorSimulator
 {
-    enum Direction { UP, DOWN, IDLE }
+enum Direction { UP, DOWN, IDLE }
 
-    class Elevator
-    {
+class Elevator
+{
 
-        public static int Floor { get; set; }
-        public static bool IsShuttingDown { get; set; }
+    public static int Floor { get; set; }
+    public static bool IsShuttingDown { get; set; }
+    
+    public int Capacity { get; }
+    public int Speed { get; }
+
+    private int _currentFloor;
+    private Object lck = new Object();
+    public int CurrentFloor { 
+        get { lock(lck) { return _currentFloor; }} 
+        private set { lock(lck) { _currentFloor = value; }} 
+    }
+
+    public Direction State { get; private set; }
+    private BlockingCollection<Passenger> waitingQueue;
+    private BlockingCollection<Passenger> serviceQueue;
+
+    public Elevator(int Capacity, int Speed) {
+
+        this.Capacity = Capacity;
+        this.Speed = Speed;
+
+        waitingQueue = new BlockingCollection<Passenger>();
+        serviceQueue = new BlockingCollection<Passenger>();
         
-        public int Capacity { get; }
-        public int Speed { get; }
+        CurrentFloor = 0;
+        State = Direction.IDLE;
 
-        private int _currentFloor;
-        private Object lck = new Object();
-        public int CurrentFloor { 
-            get { lock(lck) { return _currentFloor; }} 
-            private set { lock(lck) { _currentFloor = value; }} 
-        }
+    }
 
-        public Direction State { get; private set; }
-        private ConcurrentBag<Passenger> waitingQueue;
-        private ConcurrentBag<Passenger> serviceQueue;
+    public bool IsRoomAvailable { get { return Count < Capacity; } }
 
-        public Elevator(int Capacity, int Speed) {
+    private int Count { get { return serviceQueue.Count + waitingQueue.Count; } }
 
-            this.Capacity = Capacity;
-            this.Speed = Speed;
+    public bool WaitFor(Passenger passenger) {
+        if (Count == Capacity)
+            return false;
+        waitingQueue.Add(passenger);
+        return true;
+    }
 
-            waitingQueue = new ConcurrentBag<Passenger>();
-            serviceQueue = new ConcurrentBag<Passenger>();
-            
-            CurrentFloor = 0;
-            State = Direction.IDLE;
+    private void GetOff() {
+        serviceQueue
+            .TakeWhile(p => p.DestFloor == CurrentFloor)
+            .AsParallel()
+            .ForAll(p => Console.WriteLine("<" + p + " has got off " + this));
+    }
 
-        }
+    private void GetOn() {
+        waitingQueue
+            .TakeWhile((p, i) => p.Floor == CurrentFloor && p.Direction == State)
+            .AsParallel()
+            .ForAll(p => {
+                serviceQueue.Add(p);
+                Console.WriteLine(">" + p + " has got in " + this);
+            });
+    }
 
-        public bool IsAvailableRoom {
-            get { return Count < Capacity; }
-        }
+    private void LimitSpeed() {
+        Thread.Sleep(Speed * 1000);
+    }
 
-        private int Count { get {
-            return serviceQueue.Count + waitingQueue.Count;
-        }}
+    private bool IsInService { get { return serviceQueue.Count > 0; } }
 
-        public bool GetOn(Passenger passenger) {
-            if (Count == Capacity)
-                return false;
-            waitingQueue.Add(passenger);
-            return true;
-        }
+    private bool IsInServiceFor(Direction direction) {
+        return serviceQueue.Count(p => p.Direction == direction) > 0;
+    }
 
-        private void GetOff() {
-            serviceQueue
-                .Where(p => p.DestFloor == CurrentFloor)
-                .AsParallel()
-                .ForAll(p => {
-                    serviceQueue.TryTake(out p);
-                    Console.WriteLine("<" + p + " has got off " + this);
-                });
-        }
+    private bool IsWaiting { get { return waitingQueue.Count > 0; } }
 
-        private void GetOn() {
-            waitingQueue
-                .Where(p => p.Floor == CurrentFloor)
-                .AsParallel()
-                .ForAll(p => {
-                    if (waitingQueue.TryTake(out p)) {
-                        serviceQueue.Add(p);
-                        Console.WriteLine(">" + p + " has got in " + this);
-                    }
-                });
-        }
+    private bool IsWaitingFor(Direction direction) {
+        return waitingQueue.Count(p => {
+            return (direction == Direction.UP && p.Floor > CurrentFloor) 
+                || (direction == Direction.DOWN && p.Floor < CurrentFloor);
+        }) > 0;
+    }
 
-        private void LimitSpeed() {
-            Thread.Sleep(Speed * 1000);
-        }
-
-        private bool IsInService 
-        { get { return serviceQueue.Count > 0; } }
-
-        private bool IsWaitingFor 
-        { get { return waitingQueue.Count > 0; } }
-
-        private void GoTo(Direction destDirection) {
-            if (destDirection == Direction.UP) {
-                if (CurrentFloor < Floor) {
-                    LimitSpeed();
-                    CurrentFloor++;
-                }
-            }else if (destDirection == Direction.DOWN) {
-                if (CurrentFloor > 0) {
-                    LimitSpeed();
-                    CurrentFloor--;
-                }
+    private void GoTo() {
+        LimitSpeed();
+        if (State == Direction.UP) {
+            if (CurrentFloor < Floor) {
+                CurrentFloor++;
+            } else {
+                State = Direction.DOWN;
+                CurrentFloor--;
             }
-        }
-
-        private Direction SwapDirection(Direction destDirection) {
-                switch(destDirection) {
-                        case Direction.UP: return Direction.DOWN;
-                        case Direction.DOWN: return Direction.UP;
-                }
-                return Direction.IDLE;
-        }
-
-        private Direction GetDirectionFor(Passenger passenger) {
-            if (passenger.Floor < CurrentFloor)
-                return Direction.DOWN;
-            else if (passenger.Floor > CurrentFloor)
-                return Direction.UP;
-            return Direction.IDLE;
-        }
-
-        public void Report() {
-        
-            
-        }
-
-        private void DoService(Direction destDirection) {
-
-                while (!IsShuttingDown && (IsWaitingFor || IsInService)) {
-
-                        if (CurrentFloor == Floor)
-                                // we are at top floor, return down
-                                destDirection = Direction.DOWN;
-                        else if (CurrentFloor == 0)
-                                // we are at ground/basement floor
-                                destDirection = Direction.UP;
-
-                        State = destDirection;
-
-                        Report();
-
-                        GetOff();
-
-                        GetOn();
-
-                        GoTo(destDirection);
-
-                }
-
-                State = Direction.IDLE;
-                Report();
-        }
-
-        public void Run() {
-
-            PassengerQueue.AddElevator(this);
-
-            while (!IsShuttingDown) {
-                Thread.Yield();
-
-                if (PassengerQueue.Count() == 0)
-                        continue;
-
-                Passenger passenger = PassengerQueue.First(this);
-
-                if (null == passenger || !IsWaitingFor)
-                        continue;
-
-                Direction initialDirection = GetDirectionFor(passenger);
-                Direction destDirection = initialDirection;
-
-                if (destDirection == Direction.IDLE)
-                        destDirection = passenger.Direction;
-
-                DoService(destDirection);
-                
+        } else if (State == Direction.DOWN) {
+            if (CurrentFloor > 0) {
+                CurrentFloor--;
+            } else {
+                CurrentFloor++;
             }
-
-            PassengerQueue.RemoveElevator(this);
-        }
-
-        public override String ToString() {
-            return string.Format("[ E{0,-9}: {1}|{2}|{3}/{4} ]", GetHashCode(), 
-                CurrentFloor, State, serviceQueue.Count, waitingQueue.Count);
-        }
-
-        public Thread GetNewThread()
-        {
-            return new Thread(new ThreadStart(this.Run));
         }
     }
+
+    private Direction SwapDirection(Direction destDirection) {
+            switch(destDirection) {
+                    case Direction.UP: return Direction.DOWN;
+                    case Direction.DOWN: return Direction.UP;
+            }
+            return Direction.IDLE;
+    }
+
+    private Direction GetDirectionFor(Passenger passenger) {
+        if (null == passenger)
+            return Direction.IDLE;
+
+        if (passenger.Floor < CurrentFloor)
+            return Direction.DOWN;
+        else if (passenger.Floor > CurrentFloor)
+            return Direction.UP;
+        return passenger.Direction;
+    }
+
+    public void Report() {
+        Console.WriteLine("*" + this);        
+    }
+
+    private void DoService() {
+
+            while (!IsShuttingDown && State != Direction.IDLE && (IsWaiting || IsInService)) {
+
+                    Report();
+
+                    GetOff();
+
+                    GetOn();
+
+                    if (!IsInServiceFor(State) && !IsWaitingFor(State)) {
+                        State = SwapDirection(State);
+                        GetOn();
+                    }
+                        
+                    GoTo();
+
+            }
+
+            State = Direction.IDLE;
+            Report();
+    }
+
+    private Passenger Nearest() {
+        if (!IsWaiting)
+            return null;
+
+        int min = waitingQueue.Min(p => Math.Abs(CurrentFloor - p.Floor));
+        return waitingQueue.First(p => Math.Abs(CurrentFloor - p.Floor) == min);
+    }
+
+    public void Run() {
+
+        PassengerQueue.AddElevator(this);
+
+        while (!IsShuttingDown) {
+            Thread.Yield();
+
+            if (!IsWaiting)
+                continue;
+
+            State = GetDirectionFor(Nearest());
+            
+            DoService();
+            
+        }
+
+        PassengerQueue.RemoveElevator(this);
+    }
+
+    public override String ToString() {
+        return string.Format("[ E{0,-9}: {1}|{2}|{3}/{4} ]", GetHashCode(), 
+            CurrentFloor, State, serviceQueue.Count, waitingQueue.Count);
+    }
+
+    public Thread GetNewThread()
+    {
+        return new Thread(new ThreadStart(this.Run));
+    }
+}
 }
